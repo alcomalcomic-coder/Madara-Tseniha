@@ -1,5 +1,4 @@
-
-name: Build Madara APK from ZIP
+name: Build Madara Android APK
 
 on:
   workflow_dispatch:
@@ -9,33 +8,58 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - name: Download project from repository
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-java@v4
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-    
+      - name: Find Android SDK and install required packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          echo "Android SDK: $SDK_ROOT"
+          test -d "$SDK_ROOT" || { echo 'Android SDK directory is missing'; exit 1; }
+          SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -f "$SDKMANAGER" ]; then
+            SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" -type f -name sdkmanager -path '*/bin/sdkmanager' | head -n 1)"
+          fi
+          test -n "$SDKMANAGER" && test -f "$SDKMANAGER" || { echo 'sdkmanager binary is missing'; exit 1; }
+          echo "Using: $SDKMANAGER"
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+          # GitHub runners normally have licences already accepted.
+          "$SDKMANAGER" --sdk_root="$SDK_ROOT" 'platforms;android-35' 'build-tools;35.0.0'
 
-      - name: Install Android SDK
-        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
-
-      - uses: gradle/actions/setup-gradle@v4
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
-      - name: Extract project
-        run: mkdir -p source && unzip -q Madara_Ceniha_Android_Project.zip -d source
+      - name: Extract Madara project
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f Madara_Ceniha_Android_Project.zip || { echo 'Madara ZIP not found'; exit 1; }
+          mkdir -p source
+          unzip -q Madara_Ceniha_Android_Project.zip -d source
+          test -f source/settings.gradle || { echo 'settings.gradle not found in ZIP root'; exit 1; }
+          test -f source/app/build.gradle || { echo 'app/build.gradle not found in ZIP root'; exit 1; }
 
-      - name: Build APK
+      - name: Build installable debug APK
         working-directory: source
-        run: gradle :app:assembleDebug --no-daemon
+        run: gradle :app:assembleDebug --no-daemon --stacktrace
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload APK for phone
+        uses: actions/upload-artifact@v4
         with:
-          name: Madara-Ceniha-APK
+          name: Madara-Ceniha-Android-APK
           path: source/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
